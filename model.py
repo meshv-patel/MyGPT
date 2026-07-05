@@ -1,3 +1,5 @@
+from pyexpat import features
+
 import torch
 import torch.nn as nn
 import math
@@ -33,11 +35,11 @@ class PositionalEncoding(nn.Module):
         return self.dropout(X)
 
 class LayerNormalization(nn.Module):
-    def __init__(self, epsilon=1e-06):
+    def __init__(self, features, epsilon=1e-06):
         super().__init__()
         self.epsilon = epsilon
-        self.alpha = nn.Parameter(torch.ones(1))
-        self.bias = nn.Parameter(torch.zeros(1))
+        self.alpha = nn.Parameter(torch.ones(features))
+        self.bias = nn.Parameter(torch.zeros(features))
 
     def forward(self, X):
         mean = X.mean(dim=-1, keepdim=True)
@@ -101,3 +103,34 @@ class MultiHeadAttention(nn.Module):
         X = X.transpose(1, 2).contiguous().view(X.size(0), -1, self.d_model)
 
         return self.w_o(X), attention_scores
+class ResidualConnection(nn.Module):
+    def __init__(self, features, dropout):
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+        self.normalization = LayerNormalization(features)
+
+    def forward(self, X, sublayer):
+        return self.normalization(X + self.dropout(sublayer(self.normalization(X))))
+    
+class EncoderBlock(nn.Module):
+    def __init__(self, features, attention, ffn, dropout):
+        super().__init__()
+        self.attention = attention
+        self.ffn = ffn
+        self.residual_connections = nn.ModuleList([ResidualConnection(features, dropout) for _ in range(2)])
+
+    def forward(self, X, mask):
+        X = self.residual_connections[0](X, lambda X: self.attention(X, X, X, mask))
+        X = self.residual_connections[1](X, self.ffn)
+        return X
+
+class Encoder(nn.Module):
+    def __init__(self, layers, features):
+        super().__init__()
+        self.layers = layers
+        self.norm = LayerNormalization(features)
+
+    def forward(self, X, mask):
+        for layer in self.layers:
+            X = layer(X, mask)
+        return self.norm(X)
